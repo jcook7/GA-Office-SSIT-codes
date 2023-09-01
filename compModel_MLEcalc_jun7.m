@@ -1,0 +1,84 @@
+%% Using the SSIT to fit and Design Single-Cell Experiments 
+% In this script, we show how the SSIT can be used to identify a
+% time-inhomogeneous model for the activation of Dusp1 mRNA expression
+% under Dexamethasome stimulation of Glucocorticoid Receptors.
+  clear all
+  clc
+
+  %% Load saved mHast and Sensitivity
+   %mhResults = load('complex_dusp1_mhast.mat').mhResults;
+   %sensSoln = load('complex_dusp1_sens.mat').sensSoln;
+   comp_Model = load('complex_dusp1_model.mat').Model;
+%   %fspSoln = load('complex_dusp1_FSP.mat').fspSoln;
+%   comp_Model.plotMHResults(mhResults);
+
+  %mhResults = load('complex_dusp1_Trp_mhast.mat').mhResults;
+  %sensSoln = load('complex_dusp1_Trp_sens.mat').sensSoln;
+%   ModelTrypt = load('complex_dusp1_Trp_model.mat').ModelTrypt;
+    %% 
+  starttime=-15000;
+  comp_Modelssa=comp_Model;
+  comp_Modelssa.initialTime = starttime;
+  comp_Modelssa.tSpan = [starttime,comp_Model.tSpan]
+  comp_Modelssa.ssaOptions.useTimeVar=true
+  comp_Modelssa.ssaOptions.signalUpdateRate=1
+  comp_Modelssa.solutionScheme = 'SSA';  % Set solution scheme to SSA.
+  comp_Modelssa.ssaOptions.Nexp = 50; 
+  comp_Modelssa.ssaOptions.nSimsPerExpt = 50;
+  comp_Model.ssaOptions.applyPDO = true; % Include the distortion in the SSA data.
+  comp_Modelssa.solve([],'CompDuspSSAData50Expts.csv'); 
+  comp_Modelssa.solutionScheme = 'FSP';  % Set solution scheme back to FSP.
+
+  %% Find MLE for each simulated data set.
+
+  comp_Model.fittingOptions.modelVarsToFit = [1:4];
+  nFrePars = length(comp_Model.fittingOptions.modelVarsToFit)
+  MLE = zeros(1,nFrePars,comp_Modelssa.ssaOptions.Nexp);
+  fMLE = inf(1,nFrePars,comp_Modelssa.ssaOptions.Nexp);
+  B = comp_Model.loadData('CompDuspSSAData50Expts.csv',{'x1','exp1_s1';'x2','exp1_s2';'x3','exp1_s3'});
+
+for iExp = 1:comp_Modelssa.ssaOptions.Nexp
+    iExp
+    %GR&Gene&Dusp1   B = comp_Model.loadData('CompDuspSSAData200Expts.csv',{'x1',['exp',num2str(iExp),'_s1'];'x2',['exp',num2str(iExp),'_s2'];'x3',['exp',num2str(iExp),'_s3']}); % Link non-distorted data.
+    %GR&Dusp1   B = comp_Model.loadData('CompDuspSSAData200Expts.csv',{'x1',['exp',num2str(iExp),'_s1'];'x3',['exp',num2str(iExp),'_s3']}); % Link non-distorted data.
+
+
+    B = comp_Model.loadData('CompDuspSSAData50Expts.csv',{'x1',['exp',num2str(iExp),'_s1'];...
+                                               'x2',['exp',num2str(iExp),'_s2'];'x3',['exp',num2str(iExp),'_s3']}); % Link non-distorted data.
+    B.fittingOptions.timesToFit = [false,ones(1,length(comp_Model.tSpan),'logical')];
+    B.tSpan = B.tSpan(2:end);
+%     B.fittingOptions.modelVarsToFit = [2,3];
+     if iExp==1
+         x0 = [B.parameters{B.fittingOptions.modelVarsToFit,2}]';
+     else
+         x0 = squeeze(MLE(1,:,iExp-1)); 
+     end
+    fitOptions = optimset('Display','iter','MaxIter',100);
+    [MLE(1,:,iExp),fMLE(1,:,iExp)] = B.maximizeLikelihood(x0,fitOptions);
+end
+%% load already run data
+MLE=load('MLE_result.mat').MLE;
+B=load("B_model.mat").B;
+sensSoln = load("complex_dusp1_sens.mat").sensSoln
+%% Solve for Fisher Information Matrix at all Time Points
+load MLE_result
+B.fittingOptions.modelVarsToFit = [1:4];
+
+B.solutionScheme = 'FSP';
+B.fspOptions.fspTol = 1e-8;
+B.fspOptions.bounds=[];
+[fspSoln,B.fspOptions.bounds] = B.solve
+
+B.fspOptions.fspTol = inf;
+B.solutionScheme = 'fspSens';
+sensSoln = B.solve(fspSoln.stateSpace);
+
+B.pdoOptions.unobservedSpecies = {'x1','x2'};
+vt=1
+fims = B.computeFIM(sensSoln.sens);
+FIM = B.evaluateExperiment(fims,B.dataSet.nCells(2:end));
+
+
+%% Make Plots
+fimFreePars = FIM(B.fittingOptions.modelVarsToFit,B.fittingOptions.modelVarsToFit);
+B.makeMleFimPlot(squeeze(MLE(1,:,:)),fimFreePars,[1,4],0.95)
